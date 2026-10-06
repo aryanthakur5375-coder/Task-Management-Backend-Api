@@ -1,129 +1,139 @@
 import streamlit as st
 
-# ==========================================================
-# PAGE CONFIG
-# ==========================================================
+import api
 
-st.set_page_config(
-    page_title="Task Management System",
-    page_icon="📝",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Task Manager", page_icon="✅")
 
-# ==========================================================
-# SESSION STATE
-# ==========================================================
-
-if "access_token" not in st.session_state:
-    st.session_state["access_token"] = None
-
+if "token" not in st.session_state:
+    st.session_state.token = None
 if "username" not in st.session_state:
-    st.session_state["username"] = None
+    st.session_state.username = None
 
-# ==========================================================
-# SIDEBAR
-# ==========================================================
 
-with st.sidebar:
+def handle_error(e: api.APIError):
+    msgs = {
+        401: "Session expired. Please log in again.",
+        403: "You are not authorized to do this.",
+        404: "Task not found.",
+        422: "Invalid input.",
+        500: "Server error. Try again later.",
+    }
+    st.error(msgs.get(e.status_code, e.detail))
+    if e.status_code == 401:
+        st.session_state.token = None
+        st.session_state.username = None
 
-    st.title("📝 Task Manager")
 
-    st.markdown("---")
+def login_view():
+    st.title("✅ Task Manager - Login")
+    tab_login, tab_register = st.tabs(["Login", "Register"])
 
-    if st.session_state["access_token"]:
+    with tab_login:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.form_submit_button("Login"):
+                try:
+                    data = api.login(username, password)
+                    st.session_state.token = data["access_token"]
+                    st.session_state.username = username
+                    st.rerun()
+                except api.APIError as e:
+                    handle_error(e)
 
-        st.success(f"Logged in as **{st.session_state['username']}**")
+    with tab_register:
+        with st.form("register_form"):
+            r_username = st.text_input("Username", key="r_username")
+            r_email = st.text_input("Email", key="r_email")
+            r_password = st.text_input("Password", type="password", key="r_password")
+            if st.form_submit_button("Register"):
+                try:
+                    api.register(r_username, r_email, r_password)
+                    st.success("Account created. Please log in.")
+                except api.APIError as e:
+                    handle_error(e)
 
-        st.markdown("---")
 
-        st.info(
-            """
-### Navigation
+def dashboard_view():
+    st.title("✅ My Tasks")
 
-Use the pages on the left sidebar:
-
-- Dashboard
-- Create Task
-- View Tasks
-            """
-        )
-
-        st.markdown("---")
-
-        if st.button("🚪 Logout", use_container_width=True):
-
-            st.session_state["access_token"] = None
-            st.session_state["username"] = None
-
-            st.success("Logged out successfully.")
-
+    with st.sidebar:
+        st.write(f"Logged in as **{st.session_state.username}**")
+        if st.button("Refresh"):
+            st.rerun()
+        if st.button("Logout"):
+            st.session_state.token = None
+            st.session_state.username = None
             st.rerun()
 
-    else:
+    with st.form("create_task_form", clear_on_submit=True):
+        st.subheader("Add Task")
+        title = st.text_input("Title")
+        description = st.text_area("Description")
+        if st.form_submit_button("Create"):
+            if not title.strip():
+                st.error("Title is required.")
+            else:
+                try:
+                    api.create_task(st.session_state.token, title.strip(), description.strip() or None)
+                    st.success("Task created.")
+                    st.rerun()
+                except api.APIError as e:
+                    handle_error(e)
 
-        st.warning("You are not logged in.")
+    try:
+        tasks = api.get_tasks(st.session_state.token)
+    except api.APIError as e:
+        handle_error(e)
+        return
 
-        st.info(
-            """
-Please login or register first.
+    if not tasks:
+        st.info("No tasks yet.")
+        return
 
-Use the pages:
+    for task in tasks:
+        with st.expander(f"{'✅' if task['completed'] else '⬜'} {task['title']}"):
+            st.write(task.get("description") or "_No description_")
+            st.caption(f"Created: {task['created_at']} | Updated: {task['updated_at']}")
 
-- Login
-- Register
-            """
-        )
+            completed = st.checkbox("Completed", value=task["completed"], key=f"done_{task['id']}")
+            if completed != task["completed"]:
+                try:
+                    api.update_task(st.session_state.token, task["id"], completed=completed)
+                    st.rerun()
+                except api.APIError as e:
+                    handle_error(e)
 
-# ==========================================================
-# HOME PAGE
-# ==========================================================
+            with st.form(f"edit_form_{task['id']}"):
+                new_title = st.text_input("Title", value=task["title"], key=f"title_{task['id']}")
+                new_desc = st.text_area(
+                    "Description", value=task.get("description") or "", key=f"desc_{task['id']}"
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("Update"):
+                        try:
+                            api.update_task(
+                                st.session_state.token,
+                                task["id"],
+                                title=new_title,
+                                description=new_desc or None,
+                            )
+                            st.success("Task updated.")
+                            st.rerun()
+                        except api.APIError as e:
+                            handle_error(e)
+                with col2:
+                    if st.form_submit_button("Delete"):
+                        try:
+                            api.delete_task(st.session_state.token, task["id"])
+                            st.success("Task deleted.")
+                            st.rerun()
+                        except api.APIError as e:
+                            handle_error(e)
 
-st.title("📝 Task Management System")
 
-st.markdown("---")
-
-if st.session_state["access_token"]:
-
-    st.success("Welcome back!")
-
-    st.markdown(
-        """
-This application allows you to:
-
-- ✅ Create Tasks
-- ✏️ Update Tasks
-- 🗑 Delete Tasks
-- 🔍 Search Tasks
-- 🎯 Filter by Priority
-- 📊 Dashboard Statistics
-
-Use the sidebar to navigate through the application.
-"""
-    )
-
+if st.session_state.token:
+    dashboard_view()
 else:
-
-    st.markdown(
-        """
-## Welcome!
-
-This Task Management System is built using:
-
-- FastAPI
-- PostgreSQL
-- SQLAlchemy
-- JWT Authentication
-- Streamlit
-
-### To get started:
-
-1. Register a new account
-2. Login
-3. Start managing your tasks
-"""
-    )
-
-st.markdown("---")
-
-st.caption("Built with ❤️ using FastAPI + Streamlit")
+    login_view()
